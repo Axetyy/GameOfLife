@@ -72,6 +72,8 @@ For example:
 python viewer.py patterns/collatz67.mc --j 4 --size 1600x900 --run
 ```
 
+['Overview'](/screenshots/overview.png)
+
 ## Viewer controls
 
 | Input | Action |
@@ -135,6 +137,13 @@ goto 7
 
 The corresponding computer pattern is available at
 [`patterns/collatz67.mc`](patterns/collatz67.mc).
+
+
+The computer can be seen in these screenshots that is calculating the Collatz sequence for 67 correctly:
+
+[![](./screenshots/first_calculation.png)](./screenshots/first_calculation.png)
+[![](./screenshots/second_calculation.png)](./screenshots/second_calculation.png)
+[![](./screenshots/third_calculation.png)](./screenshots/third_calculation.png)
 
 ## Credits
 
