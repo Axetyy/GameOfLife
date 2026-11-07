@@ -6,15 +6,49 @@ from logic.mirror import Mirror
 import pygame
 import math
 import time
+
+THEMES = [
+    dict(name="Ocean", bg=(9, 11, 18), mid=(30, 110, 190), top=(190, 255, 215),
+         age=[(255, 255, 255), (120, 255, 220), (40, 150, 230), (60, 60, 170)]),
+    dict(name="Ember", bg=(14, 8, 8), mid=(190, 60, 20), top=(255, 225, 140),
+         age=[(255, 250, 210), (255, 200, 60), (235, 90, 25), (140, 25, 40)]),
+    dict(name="Neon", bg=(10, 6, 20), mid=(130, 40, 200), top=(90, 255, 235),
+         age=[(255, 255, 255), (255, 80, 200), (150, 70, 255), (50, 130, 255)]),
+]
+
+AGE_CAP = 1 << 40
+AGE_LOG_MAX = 24.0
+
+PANEL_BASE = 92 
 PANEL_H = 92
 
 
-def make_palette():
+@property
+def panel_h(self):
+    W = self.screen.get_width()
+    return PANEL_BASE + self.layout_patterns(W)[1]
+
+def make_palette(theme):
+    """Static palette: index 0 = background, 255 = brightest (a live cell)."""
     pal = []
-    bg, mid, top = np.array((9, 11, 18)), np.array((30, 110, 190)), np.array((190, 255, 215))
+    bg, mid, top = (np.array(theme[k], dtype=float) for k in ("bg", "mid", "top"))
     for i in range(256):
         t = i / 255.0
         c = bg + (mid - bg) * min(1, t * 2) if t < 0.5 else mid + (top - mid) * (t - 0.5) * 2
+        pal.append(tuple(int(v) for v in c))
+    return pal
+
+
+def make_age_palette(theme):
+    """Age palette: index 0 = background, 1 = newborn ... 255 = oldest."""
+    stops = [np.array(s, dtype=float) for s in theme["age"]]
+    pal = [tuple(theme["bg"])]
+    n = 255
+    for i in range(n):
+        t = i / (n - 1) * (len(stops) - 1)
+        k = min(int(t), len(stops) - 2)
+        f = t - k
+        c = stops[k] + (stops[k + 1] - stops[k]) * f
         pal.append(tuple(int(v) for v in c))
     return pal
 
@@ -23,7 +57,10 @@ class Viewer:
     def __init__(self, universe, sim, size, selected_pattern=None):
         self.u, self.sim = universe, sim
         self.mir = Mirror(universe)
-        self.pal = make_palette()
+        self.theme_idx = 0
+        self.color_mode = 'age'
+        self.age_prev = None
+        self._build_palettes()
         self.screen = pygame.display.set_mode(size, pygame.RESIZABLE)
         pygame.display.set_caption("Game of Life")
         self.font = pygame.font.Font(None, 22)
@@ -33,15 +70,66 @@ class Viewer:
         self.last_draw_ms = 0.0
         self.selected_pattern = selected_pattern
         self.pattern_buttons = {}
-        self.speed_drag = None      # None, 'step' or 'rate'
+        self.color_btn = pygame.Rect(0, 0, 0, 0)
+        self.theme_btn = pygame.Rect(0, 0, 0, 0)
+        self.speed_drag = None
         self.speed_slider_rect = pygame.Rect(150, 0, 300, 14)
         self.rate_slider_rect = pygame.Rect(150, 0, 300, 14)
         self.speed_max_j = 20
         self.fit()
 
+        
+    def _build_palettes(self):
+        theme = THEMES[self.theme_idx]
+        self.static_pal = make_palette(theme)
+        self.age_pal = make_age_palette(theme)
+    def layout_patterns(self, W):
+        """Wrap pattern buttons; returns (rects, extra_height)."""
+        x, y = 105, 5
+        rects = {}
+        for name in BUILTIN_PATTERNS:
+            tw = self.font.size(name)[0] + 18
+            if x + tw > W - 8 and x > 8:
+                x = 8
+                y += 32
+            rects[name] = pygame.Rect(x, y, tw, 27)
+            x += tw + 7
+        return rects, y - 5
+
+    def toggle_color_mode(self):
+        self.color_mode = 'static' if self.color_mode == 'age' else 'age'
+        self.age_prev = None
+
+    def cycle_theme(self):
+        self.theme_idx = (self.theme_idx + 1) % len(THEMES)
+        self._build_palettes()
+
+    def age_colorize(self, alive_buf, ox, oy, gen):
+        alive = alive_buf > 0
+        ages = np.full(alive_buf.shape, -1, np.int64)
+        ages[alive] = 0
+        prev = self.age_prev
+        if prev is not None and gen >= prev[2]:
+            pa, (pox, poy), pgen = prev
+            dg = min(gen - pgen, AGE_CAP)
+            bh, bw = alive_buf.shape
+            ph, pw = pa.shape
+            x0, x1 = max(ox, pox), min(ox + bw, pox + pw)
+            y0, y1 = max(oy, poy), min(oy + bh, poy + ph)
+            if x1 > x0 and y1 > y0:
+                old = pa[y0 - poy:y1 - poy, x0 - pox:x1 - pox]
+                cur = ages[y0 - oy:y1 - oy, x0 - ox:x1 - ox]
+                both = (old >= 0) & (cur >= 0)
+                cur[both] = np.minimum(old[both] + dg, AGE_CAP)
+        self.age_prev = (ages, (ox, oy), gen)
+
+        idx = np.zeros(alive_buf.shape, np.uint8)
+        a = ages[alive].astype(np.float64)
+        idx[alive] = (1 + np.minimum(254.0, np.log2(1.0 + a) * (254.0 / AGE_LOG_MAX))).astype(np.uint8)
+        return idx
     def fit(self):
         W, H = self.screen.get_size()
-        H = max(1, H - PANEL_H)          # don't fit underneath the control panel
+        H = max(1, H - PANEL_H)
         with self.sim.lock:
             self.mir.sync()
             root = self.sim.root
@@ -52,9 +140,8 @@ class Viewer:
             sz = 1 << max(4, k - 12)
             x0, x1, y0, y1 = xs.min(), xs.max() + sz, ys.min(), ys.max() + sz
 
-        self.cx, self.cy = (x0 + x1) / 2, (y0 + y1) / 2 - (PANEL_H / 2) / 1.0 * 0  # recentred below
+        self.cx, self.cy = (x0 + x1) / 2, (y0 + y1) / 2 - (PANEL_H / 2) / 1.0 * 0  
         self.scale = min(64.0, max(1e-10, 0.92 * min(W / max(1, x1 - x0), H / max(1, y1 - y0))))
-        # shift so the pattern is centred in the area above the panel
         self.cy += (PANEL_H / 2) / self.scale
 
     def zoom_at(self, mx, my, factor):
@@ -80,7 +167,6 @@ class Viewer:
     def render_density(self, root, vx0, vy0, vx1, vy1, W, H):
         scale = self.scale
         k = self.u.LVL[root]
-        # FIX: never pick a block level above the root, or the root gets drawn as if it were 2^L wide.
         L = min(k, max(4, int(math.floor(math.log2(1.0 / scale)))))
         ids, xs, ys = self.mir.frontier(root, L, vx0, vy0, vx1, vy1)
         img = np.zeros((H, W), np.float64)
@@ -115,8 +201,6 @@ class Viewer:
         self.sim.running = False
         self.sim.once = False
         self.sim.request_reset()
-        # Let the worker acknowledge the abort/reset before mutating its Universe.
-        # FIX: bounded wait, and bail out if the worker thread is dead, so the UI can't hang forever.
         deadline = time.time() + 10.0
         while (self.sim.busy or self.sim.reset_req) and self.sim.is_alive() and time.time() < deadline:
             pygame.time.wait(1)
@@ -127,6 +211,7 @@ class Viewer:
             self.sim.gen = 0
             self.sim.reset_req = False
             self.u.abort = False
+        self.age_prev = None
         self.selected_pattern = name
         self.fit()
 
@@ -153,44 +238,62 @@ class Viewer:
         pygame.draw.circle(self.screen, (100, 195, 245), (knob_x, rect.centery), 8)
         pygame.draw.circle(self.screen, (235, 245, 255), (knob_x, rect.centery), 3)
 
+    def _draw_button(self, rect, text, active=False):
+        fill = (38, 105, 155) if active else (35, 43, 58)
+        pygame.draw.rect(self.screen, fill, rect, border_radius=5)
+        pygame.draw.rect(self.screen, (75, 95, 120), rect, 1, border_radius=5)
+        surf = self.font.render(text, True, (245, 248, 255))
+        self.screen.blit(surf, (rect.x + (rect.width - surf.get_width()) // 2,
+                                rect.y + (rect.height - surf.get_height()) // 2))
+
     def draw_controls(self):
-        """Draw clickable pattern presets, a step-size slider and a playback-speed slider."""
+        """Draw clickable pattern presets, sliders and colour-mode buttons."""
         W, H = self.screen.get_size()
-        top = H - PANEL_H
-        panel = pygame.Rect(0, top, W, PANEL_H)
+        rects, extra = self.layout_patterns(W)
+        ph = PANEL_BASE + extra
+        top = H - ph
+        ctl = top + extra                      # controls start below the last row of pattern buttons
+
+        panel = pygame.Rect(0, top, W, ph)
         pygame.draw.rect(self.screen, (13, 17, 27), panel)
         pygame.draw.line(self.screen, (55, 70, 90), (0, top), (W, top), 1)
 
         label = self.font.render("PATTERNS", True, (150, 175, 205))
         self.screen.blit(label, (8, top + 10))
-        x = 105
+
+        # layout_patterns returns rects with y relative to the panel top, so offset them
         self.pattern_buttons = {}
-        for name in BUILTIN_PATTERNS:
+        for name, r in rects.items():
+            rect = r.move(0, top)
+            self.pattern_buttons[name] = rect
             text = self.font.render(name, True, (245, 248, 255))
-            bw = text.get_width() + 18
-            rect = pygame.Rect(x, top + 5, bw, 27)
             fill = (38, 105, 155) if name == self.selected_pattern else (35, 43, 58)
             pygame.draw.rect(self.screen, fill, rect, border_radius=5)
             pygame.draw.rect(self.screen, (75, 95, 120), rect, 1, border_radius=5)
-            self.screen.blit(text, (x + 9, top + 10))
-            self.pattern_buttons[name] = rect
-            x += bw + 7
+            self.screen.blit(text, (rect.x + 9, rect.y + 5))
 
         slider_left = self.font.size("STEP SIZE  2^20  (1,048,576 gen/update)")[0] + 24
         slider_right = max(slider_left + 100, min(W - 24, slider_left + 340))
 
         step_text = self.font.render(
             f"STEP SIZE  2^{self.sim.j}  ({1 << self.sim.j:,} gen/update)", True, (225, 235, 245))
-        self.screen.blit(step_text, (8, top + 40))
-        self.speed_slider_rect = pygame.Rect(slider_left, top + 38, slider_right - slider_left, 14)
+        self.screen.blit(step_text, (8, ctl + 40))
+        self.speed_slider_rect = pygame.Rect(slider_left, ctl + 38, slider_right - slider_left, 14)
         self._draw_slider(self.speed_slider_rect, self.sim.j / self.speed_max_j)
 
         idx = self.sim.rate_idx
         rate_text = self.font.render(f"SPEED  {self.rate_label(idx)}", True, (225, 235, 245))
-        self.screen.blit(rate_text, (8, top + 66))
-        self.rate_slider_rect = pygame.Rect(slider_left, top + 64, slider_right - slider_left, 14)
+        self.screen.blit(rate_text, (8, ctl + 66))
+        self.rate_slider_rect = pygame.Rect(slider_left, ctl + 64, slider_right - slider_left, 14)
         self._draw_slider(self.rate_slider_rect, idx / (len(RATES) - 1))
 
+        bx = slider_right + 24
+        self.color_btn = pygame.Rect(bx, ctl + 34, 210, 24)
+        self.theme_btn = pygame.Rect(bx, ctl + 62, 210, 24)
+        self._draw_button(self.color_btn,
+                        f"COLOR: {'AGE' if self.color_mode == 'age' else 'STATIC'}  (C)",
+                        active=self.color_mode == 'age')
+        self._draw_button(self.theme_btn, f"PALETTE: {THEMES[self.theme_idx]['name']}  (V)")
     def draw(self):
         t0 = time.time()
         W, H = self.screen.get_size()
@@ -203,16 +306,23 @@ class Viewer:
             pop, lvl, nodes = self.u.POP[root], self.u.LVL[root], len(self.u)
             if scale >= 0.5:
                 buf, (bw, bh), (ox, oy) = self.render_cells(root, vx0, vy0, vx1, vy1)
+                if self.color_mode == 'age':
+                    buf = self.age_colorize(buf, ox, oy, gen)
+                    pal = self.age_pal
+                else:
+                    self.age_prev = None
+                    pal = self.static_pal
                 s8 = pygame.Surface((bw, bh), 0, 8)
-                s8.set_palette(self.pal)
+                s8.set_palette(pal)
                 pygame.surfarray.blit_array(s8, buf.T)
                 scaled = pygame.transform.scale(s8, (max(1, round(bw * scale)), max(1, round(bh * scale))))
-                self.screen.fill(self.pal[0])
+                self.screen.fill(pal[0])
                 self.screen.blit(scaled, (-(vx0 - ox) * scale, -(vy0 - oy) * scale))
             else:
+                self.age_prev = None
                 img, _ = self.render_density(root, vx0, vy0, vx1, vy1, W, H)
                 s8 = pygame.Surface((W, H), 0, 8)
-                s8.set_palette(self.pal)
+                s8.set_palette(self.static_pal)
                 pygame.surfarray.blit_array(s8, img.T)
                 self.screen.blit(s8, (0, 0))
         self.last_draw_ms = (time.time() - t0) * 1000
@@ -222,6 +332,9 @@ class Viewer:
     def hud(self, gen, pop, lvl, nodes):
         sim = self.sim
         status = "COMPUTING..." if sim.busy else ("RUNNING" if sim.running else "paused")
+        mode = "cell age" if self.color_mode == 'age' else "static"
+        if self.color_mode == 'age' and self.scale < 0.5:
+            mode += " (zoom in to see ages)"
         lines = [
             f"generation  {gen:,}",
             f"population  {pop:,}",
@@ -229,10 +342,11 @@ class Viewer:
             f"universe    {2 ** lvl:,} x {2 ** lvl:,} cells   zoom {self.scale:.3g} px/cell",
             f"hashlife    {nodes:,} nodes   last step {sim.last_dt:.2f}s   draw {self.last_draw_ms:.0f} ms"
             + (f"   gc x{sim.gcs}" if sim.gcs else ""),
+            f"colors      {mode}   palette {THEMES[self.theme_idx]['name']}",
         ]
         if self.show_help:
             lines += ["", "SPACE run/pause   N step   UP/DOWN step size   [ ] playback speed   wheel zoom   drag pan",
-                      "F fit   R reset   S screenshot   H hide help   ESC quit",
+                      "C age/static colors   V next palette   F fit   R reset   S screenshot   H hide help   ESC quit",
                       "Click a pattern below to load it; sliders change step size and playback speed."]
         y = 6
         for ln in lines:
@@ -265,11 +379,16 @@ class Viewer:
                         self.sim.rate_idx = min(len(RATES) - 1, self.sim.rate_idx + 1)
                     elif k == pygame.K_r:
                         self.sim.running = False
+                        self.age_prev = None
                         self.sim.request_reset()
                     elif k == pygame.K_f:
                         self.fit()
                     elif k == pygame.K_h:
                         self.show_help = not self.show_help
+                    elif k == pygame.K_c:
+                        self.toggle_color_mode()
+                    elif k == pygame.K_v:
+                        self.cycle_theme()
                     elif k == pygame.K_s:
                         name = time.strftime("life_%Y%m%d_%H%M%S.png")
                         pygame.image.save(self.screen, name)
@@ -285,13 +404,19 @@ class Viewer:
                     if clicked_pattern is not None:
                         self.load_builtin_pattern(clicked_pattern)
                         drag = None
+                    elif self.color_btn.collidepoint(e.pos):
+                        self.toggle_color_mode()
+                        drag = None
+                    elif self.theme_btn.collidepoint(e.pos):
+                        self.cycle_theme()
+                        drag = None
                     elif self.speed_slider_rect.inflate(0, 18).collidepoint(e.pos):
                         self.speed_drag = 'step'
                         self.set_speed_from_x(e.pos[0])
                     elif self.rate_slider_rect.inflate(0, 18).collidepoint(e.pos):
                         self.speed_drag = 'rate'
                         self.set_rate_from_x(e.pos[0])
-                    elif not in_panel:          # FIX: clicks on the panel no longer start a pan
+                    elif not in_panel:        
                         drag = e.pos
                 elif e.type == pygame.MOUSEBUTTONUP and e.button == 1:
                     drag = None

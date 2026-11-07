@@ -3,7 +3,8 @@ import time
 
 import numpy as np
 
-from logic.hashlife import Universe, load_pattern,load_rle,GOSPER_GUN,from_array
+from logic.hashlife import Universe, load_pattern,load_rle,from_array
+from patterns.patterns import BUILTIN_PATTERNS
 
 
 def naive_step(a):
@@ -36,7 +37,7 @@ def check_random():
 def check_composition():
     """advance(j=3) must equal 8 x advance(j=0)."""
     u = Universe()
-    root = load_rle(u, GOSPER_GUN)
+    root = load_rle(u, BUILTIN_PATTERNS["Gosper gun"])
     a = root
     for _ in range(8):
         a = u.advance(a, 0)

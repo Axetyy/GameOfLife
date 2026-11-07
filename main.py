@@ -21,7 +21,7 @@ the population density of the square of cells it covers, so a 16-million-cell-wi
 import argparse
 import time
 import pygame
-from logic.hashlife import load_pattern, load_rle
+from logic.hashlife import Universe, load_pattern, load_rle
 from simulation.sim import DEFAULT_RATE_IDX, RATES,Sim
 from patterns.patterns import BUILTIN_PATTERNS
 from ui import Viewer
@@ -37,7 +37,7 @@ def main():
     ap.add_argument("--run", action="store_true", help="start running immediately")
     a = ap.parse_args()
 
-    universe = universe()
+    universe = Universe()
     t = time.time()
     root = load_pattern(universe, a.pattern) if a.pattern else load_rle(universe, BUILTIN_PATTERNS["Gosper gun"])
     print(f"loaded in {time.time() - t:.2f}s: universe 2^{universe.LVL[root]} wide, {len(universe):,} nodes, "
