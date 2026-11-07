@@ -347,7 +347,3 @@ def load_pattern(uni, path):
     if text.lstrip().startswith("[M2]"):
         return load_mc(uni, text)
     return load_rle(uni, text)
-
-GOSPER_GUN = """x = 36, y = 9, rule = B3/S23
-24bo$22bobo$12b2o6b2o12b2o$11bo3bo4b2o12b2o$2o8bo5bo3b2o$2o8bo3bob2o4b
-obo$10bo5bo7bo$11bo3bo$12b2o!"""

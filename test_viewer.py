@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 
-from hashlife import Universe, load_pattern,load_rle,GOSPER_GUN,from_array
+from logic.hashlife import Universe, load_pattern,load_rle,GOSPER_GUN,from_array
 
 
 def naive_step(a):

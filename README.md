@@ -104,7 +104,7 @@ test_viewer.py              Viewer-related tests
 ```
 
 ## The programmable computer
-
+[![Programmable Computer](./explanations.png)](./explanations.png)
 The computer architecture used by the pattern was designed by
 [Nicolas Loizeau](https://github.com/NicolasLoizeau). The implementation,
 simulation, viewer, and the program below were built by me.
