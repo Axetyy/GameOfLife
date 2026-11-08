@@ -72,7 +72,7 @@ For example:
 python viewer.py patterns/collatz67.mc --j 4 --size 1600x900 --run
 ```
 
-['Overview'](/screenshots/overview.png)
+[![Overview](./screenshots/overview.png)](./screenshots/overview.png)
 
 ## Viewer controls
 
